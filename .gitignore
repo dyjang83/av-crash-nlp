@@ -1,0 +1,40 @@
+# Secrets
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# OS cruft
+.DS_Store
+Thumbs.db
+
+# Editor/IDE
+.vscode/
+.idea/
+
+# Large / regenerable pipeline data (fetched or derived -- see README "Run order")
+data/raw/
+data/interim/
+data/processed/
+
+# LaTeX build artifacts
+paper/**/*.aux
+paper/**/*.log
+paper/**/*.out
+paper/**/*.toc
+paper/**/*.fls
+paper/**/*.fdb_latexmk
+paper/**/*.synctex.gz
+paper/**/*.bbl
+paper/**/*.blg
