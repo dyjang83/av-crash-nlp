@@ -28,7 +28,15 @@ data/raw/
 data/interim/
 data/processed/
 
+# Findings reports -- deliberately not published to the repo yet
+reports/
+
+# Local Claude Code session settings
+.claude/
+
 # LaTeX build artifacts
+paper/main.pdf
+texput.log
 paper/**/*.aux
 paper/**/*.log
 paper/**/*.out
