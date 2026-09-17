@@ -19,6 +19,12 @@ reported side by side --
 -- along with the retained N on each side, which IS the reportability argument
 rather than a footnote to it.
 
+PERIOD. Both sides are also restricted to the same incident years (--years).
+The SGO corpus runs from 2020 to 2026 while CRSS ends at its latest annual
+release, so an unrestricted AV side puts roughly half its crashes -- the 2025
+and 2026 filings, which are also the ones from the most changed AV fleet --
+against human years that do not exist in the comparison.
+
 WHAT THIS DELIBERATELY DOES NOT DO. It does not compute crash RATES. A rate
 needs an exposure denominator (vehicle miles travelled) that exists for neither
 corpus here, and the underreporting corrections that rate comparisons require
@@ -66,12 +72,18 @@ THRESHOLDS = ["all", "any_injury", "tow_away"]
 def load_crss_years(years, severity_var: str = "MAXSEV_IM") -> pd.DataFrame:
     """Pool several CRSS annual releases into one frame.
 
-    WHY POOL. The SGO corpus spans 2021-2025; comparing it against a single
-    human year introduces a temporal mismatch that no weighting fixes, and
-    leaves the fatal cell resting on too few crashes to separate from the human
-    rate. Pooling is sound here because the comparison is DISTRIBUTIONAL: a
-    pooled share is the crash-volume-weighted average of the annual shares, so
-    no denominator reconciliation is needed. It would NOT be sound for a rate.
+    WHY POOL. Comparing the SGO corpus against a single human year introduces a
+    temporal mismatch that no weighting fixes, and leaves the fatal cell resting
+    on too few crashes to separate from the human rate. Pooling is sound here
+    because the comparison is DISTRIBUTIONAL: a pooled share is the crash-
+    volume-weighted average of the annual shares, so no denominator
+    reconciliation is needed. It would NOT be sound for a rate.
+
+    These years also define the comparison window on BOTH sides: load_sgo drops
+    AV crashes outside them. The SGO corpus runs to 2026 and CRSS ends at its
+    latest release, so leaving the AV side unrestricted -- as this module used
+    to -- silently compared ~half the AV crashes against human years that do not
+    exist.
 
     DESIGN. Each annual release is an independent sample, and a PSU identifier
     means a different thing in a different year. Both the PSU and the stratum
@@ -144,9 +156,26 @@ def sgo_incident_years(sgo_dir: str = SGO_DIR) -> pd.Series:
     return pd.Series(year.to_numpy(), index=df[c_id].astype(str).to_numpy())
 
 
-def load_sgo(narratives: str = NARRATIVES) -> pd.DataFrame:
+def load_sgo(narratives: str, years) -> pd.DataFrame:
+    """AV-side frame, restricted to incident years `years`.
+
+    `years` is required, not optional: it is the same list that selects the CRSS
+    releases, so the two sides cannot drift out of alignment. Crashes whose
+    incident date is missing or unparseable are dropped -- they cannot be placed
+    in the window, and keeping them would reopen the mismatch on a smaller scale.
+    """
     df = pd.read_json(narratives, lines=True)
     df = df[df["source"] == "sgo"].copy()
+
+    yr = sgo_incident_years()
+    df["_year"] = df["report_id"].astype(str).map(yr)
+    n_all = len(df)
+    n_undated = int(df["_year"].isna().sum())
+    df = df[df["_year"].isin(list(years))].copy()
+    print(f"[av_vs_human] SGO restricted to {list(years)}: {len(df):,} of "
+          f"{n_all:,} crashes ({n_all - len(df):,} outside the window, of which "
+          f"{n_undated:,} undated)")
+
     df["sev"] = df["struct_severity"].map(sgo_severity_common)
     df["any_injury"] = df["sev"].isin(["minor", "serious", "fatal"])
     tow = df.get("struct_towed")
@@ -301,8 +330,9 @@ def main():
     import argparse
     ap = argparse.ArgumentParser(description="AV (SGO) vs. human (CRSS) structure.")
     ap.add_argument("--years", nargs="+", type=int, default=[2021, 2022, 2023, 2024],
-                    help="CRSS annual releases to pool. Defaults to 2021-2024, "
-                    "matching the span of the SGO corpus.")
+                    help="Comparison window, applied to BOTH sides: the CRSS "
+                    "releases to pool and the SGO incident years to keep. "
+                    "Defaults to 2021-2024, the CRSS releases that exist.")
     ap.add_argument("--per-year", action="store_true",
                     help="Also report each year separately, as a stability check "
                     "on the pooled estimate.")
@@ -319,7 +349,7 @@ def main():
     a = ap.parse_args()
 
     crss = load_crss_years(a.years, severity_var=a.severity_var)
-    sgo = attach_extractions(load_sgo(a.narratives), a.extractions,
+    sgo = attach_extractions(load_sgo(a.narratives, a.years), a.extractions,
                              a.extraction_model)
 
     report = {"years": a.years, "severity_var": a.severity_var,
