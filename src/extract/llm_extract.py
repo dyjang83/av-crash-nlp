@@ -11,6 +11,12 @@ open-weight models on identical inputs:
 Both return a validated CrashExtraction plus metadata (latency, raw json,
 n_repaired). Outputs are written as JSONL keyed by (source, report_id, model).
 
+extract_raw() returns (raw_dict, logprob_content). The second element is the
+decode-time token distribution and is None for AnthropicBackend: the tool-calling
+API does not expose token logprobs. That asymmetry is not an implementation gap to
+paper over -- it is the reason the token-probability confidence signal can only be
+measured on the open-weight models, and it is reported as such.
+
 This module makes NETWORK CALLS to the configured model provider. It does not
 fabricate extractions. Run it against real narratives produced by the parse step.
 """
@@ -31,6 +37,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from schema.schema import CrashExtraction, json_schema  # noqa: E402
 from extract.prompts import SYSTEM_PROMPT, build_messages  # noqa: E402
+from extract.token_probs import extract_field_probs  # noqa: E402
 
 # Load ANTHROPIC_API_KEY (and OPENAI_API_KEY, if using the open-weight backend)
 # from a .env file in the project root, so you don't have to `export` it in
@@ -52,12 +59,25 @@ class ExtractionResult:
     extraction: Optional[dict]
     latency_s: float
     error: Optional[str] = None
+    # Per-field decode-time token probabilities (see extract.token_probs).
+    # None for backends that do not expose logprobs, and for rows extracted
+    # before this was added -- readers must treat absent as "not measured",
+    # never as zero.
+    token_probs: Optional[dict] = None
 
 
 class Backend:
     name = "base"
 
-    def extract_raw(self, narrative: str, source: str, report_id: str) -> dict:
+    def extract_raw(self, narrative: str, source: str,
+                    report_id: str) -> tuple[dict, Optional[list], Optional[str]]:
+        """Return (parsed_json, logprob_content, raw_text).
+
+        logprob_content is None when the backend cannot expose per-token
+        probabilities. raw_text is the exact emitted string, kept so the token
+        round-trip can be checked against it -- a mismatch means the offsets used
+        for span alignment are untrustworthy for that record.
+        """
         raise NotImplementedError
 
 
@@ -86,7 +106,8 @@ class AnthropicBackend(Backend):
 
     @retry(stop=stop_after_attempt(4),
            wait=wait_exponential(multiplier=1, min=2, max=30))
-    def extract_raw(self, narrative: str, source: str, report_id: str) -> dict:
+    def extract_raw(self, narrative: str, source: str,
+                    report_id: str) -> tuple[dict, None, None]:
         resp = self.client.messages.create(
             model=self.model,
             max_tokens=self.max_tokens,
@@ -97,7 +118,8 @@ class AnthropicBackend(Backend):
         )
         for block in resp.content:
             if getattr(block, "type", None) == "tool_use":
-                return dict(block.input)
+                # No logprobs: the tool-calling API does not surface them.
+                return dict(block.input), None, None
         raise ValueError("No tool_use block returned by model.")
 
 
@@ -118,7 +140,8 @@ class OpenAICompatBackend(Backend):
     """
 
     def __init__(self, model: str, base_url: str = "http://localhost:8000/v1",
-                 max_tokens: int = 1024, server_type: str = "vllm"):
+                 max_tokens: int = 1024, server_type: str = "vllm",
+                 logprobs: bool = True, top_logprobs: int = 20):
         from openai import OpenAI
         if server_type not in ("vllm", "ollama"):
             raise ValueError(f"server_type must be 'vllm' or 'ollama', got {server_type!r}")
@@ -129,10 +152,20 @@ class OpenAICompatBackend(Backend):
         self.name = model
         self.server_type = server_type
         self._schema = json_schema()
+        # Ollama gained logprobs support in v0.12.11; older servers and some vLLM
+        # builds reject the parameters outright. Rather than let a 400 burn the
+        # tenacity retries and mark every row failed, the first rejection flips
+        # this off for the rest of the run and extraction continues without the
+        # second confidence signal. Whether logprobs were actually captured is
+        # visible per row (token_probs is None), so a silently degraded run
+        # cannot be mistaken for one that measured nothing.
+        self.logprobs = logprobs
+        self.top_logprobs = top_logprobs
 
     @retry(stop=stop_after_attempt(4),
            wait=wait_exponential(multiplier=1, min=2, max=30))
-    def extract_raw(self, narrative: str, source: str, report_id: str) -> dict:
+    def _build_kwargs(self, narrative: str, source: str, report_id: str,
+                      with_logprobs: bool) -> dict:
         msgs = [{"role": "system", "content": SYSTEM_PROMPT}] + \
                build_messages(narrative, source, report_id)
         kwargs = dict(model=self.model, max_tokens=self.max_tokens,
@@ -144,18 +177,61 @@ class OpenAICompatBackend(Backend):
                 "type": "json_schema",
                 "json_schema": {"name": "crash_extraction", "schema": self._schema},
             }
-        resp = self.client.chat.completions.create(**kwargs)
-        return json.loads(resp.choices[0].message.content)
+        if with_logprobs:
+            kwargs["logprobs"] = True
+            kwargs["top_logprobs"] = self.top_logprobs
+        return kwargs
+
+    def extract_raw(self, narrative: str, source: str,
+                    report_id: str) -> tuple[dict, Optional[list], Optional[str]]:
+        try:
+            resp = self.client.chat.completions.create(
+                **self._build_kwargs(narrative, source, report_id, self.logprobs))
+        except Exception as e:
+            # Only a parameter rejection is recoverable here. Anything else
+            # (timeout, connection refused, server error) must propagate so
+            # tenacity retries it -- swallowing those would turn a transient
+            # outage into a corpus of silently logprob-free extractions.
+            if not (self.logprobs and _is_logprobs_rejection(e)):
+                raise
+            print(f"[extract] server rejected logprobs ({type(e).__name__}); "
+                  f"continuing without token probabilities for {self.name}")
+            self.logprobs = False
+            resp = self.client.chat.completions.create(
+                **self._build_kwargs(narrative, source, report_id, False))
+
+        choice = resp.choices[0]
+        text = choice.message.content
+        raw = json.loads(text)
+        lp = getattr(choice, "logprobs", None)
+        logprob_content = getattr(lp, "content", None) if lp is not None else None
+        return raw, logprob_content, text
+
+
+def _is_logprobs_rejection(e: Exception) -> bool:
+    """True if the server refused the request because of the logprobs params."""
+    status = getattr(e, "status_code", None)
+    if status not in (400, 404, 422, None):
+        return False
+    return "logprob" in str(e).lower()
 
 
 def extract_one(backend: Backend, narrative: str, source: str,
                 report_id: str) -> ExtractionResult:
     t0 = time.time()
     try:
-        raw = backend.extract_raw(narrative, source, report_id)
+        raw, logprob_content, raw_text = backend.extract_raw(
+            narrative, source, report_id)
         obj = CrashExtraction.model_validate(raw)  # schema enforcement
+        tp = None
+        if logprob_content:
+            try:
+                tp = extract_field_probs(logprob_content, content=raw_text)
+            except Exception as e:  # alignment must never sink a good extraction
+                tp = {"fields": {}, "meta": {"error": f"{type(e).__name__}: {e}"}}
         return ExtractionResult(source, report_id, backend.name, True,
-                                obj.model_dump(mode="json"), time.time() - t0)
+                                obj.model_dump(mode="json"), time.time() - t0,
+                                token_probs=tp)
     except (ValidationError, ValueError, KeyError) as e:
         return ExtractionResult(source, report_id, backend.name, False, None,
                                 time.time() - t0, error=f"{type(e).__name__}: {e}")
@@ -227,6 +303,13 @@ if __name__ == "__main__":
                     "constraint is sent (guided_json for vLLM, "
                     "response_format for Ollama).")
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--no-logprobs", action="store_true",
+                    help="Do not request token logprobs from the open-weight "
+                    "server. Only affects --backend openai; the Anthropic "
+                    "tool-calling API never returns them.")
+    ap.add_argument("--top-logprobs", type=int, default=20,
+                    help="How many candidate tokens to request per position. "
+                    "Drives the top-k truncation diagnostic in token_probs.")
     a = ap.parse_args()
 
     if a.backend == "anthropic":
@@ -236,5 +319,7 @@ if __name__ == "__main__":
             "http://localhost:11434/v1" if a.server_type == "ollama"
             else "http://localhost:8000/v1")
         be = OpenAICompatBackend(model=a.model, base_url=base_url,
-                                 server_type=a.server_type)
+                                 server_type=a.server_type,
+                                 logprobs=not a.no_logprobs,
+                                 top_logprobs=a.top_logprobs)
     run(a.input, a.output, be, limit=a.limit)

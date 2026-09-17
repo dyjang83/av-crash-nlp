@@ -4,6 +4,7 @@ numpy>=1.26
 scipy>=1.11
 scikit-learn>=1.4
 statsmodels>=0.14
+matplotlib>=3.7            # reliability / risk-coverage figures
 pydantic>=2.5
 pyyaml>=6.0
 tenacity>=8.2

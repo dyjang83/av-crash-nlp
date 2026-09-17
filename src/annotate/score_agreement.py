@@ -149,6 +149,33 @@ def model_vs_gold(gold_path: str, extractions_path: str,
     return out
 
 
+def ece_from(conf, correct, n_bins: int = 10) -> tuple[float, list]:
+    """Expected calibration error and reliability curve for one signal.
+
+    Equal-width binning over [0,1]; each bin contributes |accuracy - mean
+    confidence| weighted by its share of the sample. Empty bins are skipped, so
+    the weights sum to 1 over occupied bins.
+
+    Factored out of calibration() so the token-probability signal
+    (annotate/score_confidence.py) is scored by the identical arithmetic that
+    produced the self-reported-confidence figures already in the paper -- a
+    second implementation would make the two numbers incomparable.
+    """
+    conf = np.asarray(conf, dtype=float)
+    correct = np.asarray(correct, dtype=int)
+    bins = np.linspace(0, 1, n_bins + 1)
+    ece, curve = 0.0, []
+    for lo, hi in zip(bins[:-1], bins[1:]):
+        m = (conf >= lo) & (conf < hi if hi < 1 else conf <= hi)
+        if m.sum() == 0:
+            continue
+        acc, avg_conf, w = correct[m].mean(), conf[m].mean(), m.mean()
+        ece += w * abs(acc - avg_conf)
+        curve.append({"bin_lo": float(lo), "bin_hi": float(hi), "n": int(m.sum()),
+                      "acc": float(acc), "conf": float(avg_conf)})
+    return float(ece), curve
+
+
 def calibration(extractions_path: str, gold_path: str, model: str,
                 n_bins: int = 10) -> dict:
     """Expected calibration error of the model's self-reported confidence.
@@ -188,17 +215,8 @@ def calibration(extractions_path: str, gold_path: str, model: str,
     correct = (flat.loc[idx, "contributory_party"].astype(str).values ==
                gold.loc[idx, "contributory_party"].astype(str).values).astype(int)
 
-    bins = np.linspace(0, 1, n_bins + 1)
-    ece, curve = 0.0, []
-    for lo, hi in zip(bins[:-1], bins[1:]):
-        m = (conf >= lo) & (conf < hi if hi < 1 else conf <= hi)
-        if m.sum() == 0:
-            continue
-        acc, avg_conf, w = correct[m].mean(), conf[m].mean(), m.mean()
-        ece += w * abs(acc - avg_conf)
-        curve.append({"bin_lo": lo, "bin_hi": hi, "n": int(m.sum()),
-                      "acc": float(acc), "conf": float(avg_conf)})
-    return {"model": model, "ece": float(ece), "curve": curve, "n": int(len(idx))}
+    ece, curve = ece_from(conf, correct, n_bins=n_bins)
+    return {"model": model, "ece": ece, "curve": curve, "n": int(len(idx))}
 
 
 def _to_latex(df: pd.DataFrame, path: str, caption: str, label: str,
