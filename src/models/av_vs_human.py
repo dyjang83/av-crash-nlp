@@ -35,6 +35,7 @@ its uncertainty is an ordinary bootstrap over records.
 """
 from __future__ import annotations
 
+import glob
 import json
 import os
 from typing import Callable, Optional
@@ -53,6 +54,7 @@ from utils.config import canonical_model  # noqa: E402
 RESULTS = os.path.join("data", "processed")
 TABLES = os.path.join("paper", "tables")
 CRSS_DIR = os.path.join("data", "raw", "crss")
+SGO_DIR = os.path.join("data", "raw", "sgo")
 NARRATIVES = os.path.join("data", "interim", "narratives.jsonl")
 
 THRESHOLDS = ["all", "any_injury", "tow_away"]
@@ -117,6 +119,29 @@ def load_crss(year: int = 2023, severity_var: str = "MAXSEV_IM") -> pd.DataFrame
     acc["_psu"] = acc[PSU_COL]
     acc["_stratum"] = acc[STRATUM_COL]
     return acc
+
+
+def sgo_incident_years(sgo_dir: str = SGO_DIR) -> pd.Series:
+    """Report ID -> incident year, read from the raw SGO CSVs.
+
+    narratives.jsonl carries no date field, so the year has to come back from
+    the raw CSVs. It is read through parse_ol316._load_sgo_frame rather than a
+    fresh join so that it uses the same collapse to one row per Report ID
+    (highest Report Version) that produced the narratives -- otherwise the year
+    could be taken from a superseded version of the report whose narrative is
+    not the one in the corpus.
+
+    NHTSA publishes 'Incident Date' as MON-YYYY; the day is coarsened away.
+    """
+    from fetch.parse_ol316 import _load_sgo_frame
+    paths = sorted(glob.glob(os.path.join(sgo_dir, "*Incident_Reports*.csv")))
+    df = _load_sgo_frame(paths)
+    cols = {c.lower().strip(): c for c in df.columns}
+    c_id, c_date = cols.get("report id"), cols.get("incident date")
+    if c_id is None or c_date is None:
+        raise RuntimeError(f"SGO CSVs in {sgo_dir} lack Report ID / Incident Date")
+    year = pd.to_datetime(df[c_date], format="%b-%Y", errors="coerce").dt.year
+    return pd.Series(year.to_numpy(), index=df[c_id].astype(str).to_numpy())
 
 
 def load_sgo(narratives: str = NARRATIVES) -> pd.DataFrame:
