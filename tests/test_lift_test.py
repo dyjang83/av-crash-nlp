@@ -42,6 +42,19 @@ def test_paired_bootstrap_detects_lift():
     assert res["ci95"][0] < res["ci95"][1]
 
 
+def test_ladder_suffix_matches_lift_test_output_names():
+    # leakage_ladder reads the files lift_test.run writes; the two suffix
+    # constructions must agree or the ladder silently finds no results.
+    import re
+    from models.leakage_ladder import RUNGS, _suffix, _tag
+    for r, cfg in RUNGS.items():
+        embed = cfg.get("embed", "tfidf")
+        expect = ("" if embed == "tfidf" else f"_{embed}") + \
+            "_" + re.sub(r"[^A-Za-z0-9]+", "-", _tag(r)).strip("-")
+        assert _suffix(r) == expect
+    assert len({_suffix(r) for r in RUNGS}) == len(RUNGS)
+
+
 if __name__ == "__main__":
     test_qwk_perfect_and_random()
     test_mae()
