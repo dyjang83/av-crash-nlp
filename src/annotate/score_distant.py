@@ -248,7 +248,7 @@ def write_distant_table(df: pd.DataFrame, path: str) -> None:
              r"(reporter-filed structured codes), with 95\% bootstrap "
              r"confidence intervals on $\kappa$. Fields marked "
              r"* are evaluated in a coarsened label space "
-             r"(Table~5). \emph{abst.} is the share of "
+             r"(Table~\ref{tab:distant_cov}). \emph{abst.} is the share of "
              r"keyed records on which the extractor answered "
              r"\texttt{unknown}; \emph{acc.\textsubscript{com}} is accuracy "
              r"on the remaining, committed records (Section~5).}",
@@ -301,10 +301,12 @@ def main():
     ap.add_argument("--model", default=None,
                     help="score a single model (default: all models present)")
     ap.add_argument("--n-boot", type=int, default=1000)
+    ap.add_argument("--extractions", default=EXTRACTIONS,
+                    help="Extraction JSONL to score (default: the main run).")
     args = ap.parse_args()
 
     narratives = _load_jsonl(NARRATIVES)
-    ext = _load_extractions(EXTRACTIONS)
+    ext = _load_extractions(args.extractions)
     models = [args.model] if args.model else sorted(ext["model"].dropna().unique())
 
     all_rows = []
