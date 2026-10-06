@@ -57,6 +57,29 @@ echo "   writes to tab_lift_sbert.tex / lift_test_sbert.json -- never touches th
 echo "   canonical tfidf files, so it's safe to skip or rerun independently."
 # python -m models.lift_test --embed sbert
 
+echo "== 7c. Outcome-statement masking (answers: does the text lift survive removing"
+echo "       what the narrative already says about the outcome?) =="
+# LLM detector for outcome spans (Batch API; resumable from data/processed/batches/)
+python -m leakage.tag_outcome_spans
+# Sentence-deletion masks: outcome (primary), strict, preimpact (lower bound)
+python -m leakage.build_masked_corpus
+# Re-extract the schema fields from the outcome-masked text, so T's extracted
+# fields are not coded by a model that read the injury statements.
+python -m extract.llm_extract \
+  --input data/interim/narratives_masked_outcome.jsonl \
+  --output data/processed/extractions_masked.jsonl \
+  --backend anthropic --model claude-sonnet-4-6 --batch --source sgo
+
+echo "   -> HUMAN STEP (masker validation, see src/annotate/outcome_masking_guide.md):"
+echo "      python -m annotate.make_outcome_sample sentences      # Task S files"
+echo "      python -m annotate.make_outcome_sample recoverability # Task R files"
+echo "      two coders fill data/gold/outcome_{recover,sent}_{A,B}.csv (Task R first),"
+echo "      python -m annotate.score_outcome_mask adjudicate, resolve outcome_sent_gold.csv,"
+echo "      python -m annotate.score_outcome_mask score"
+
+echo "== 7d. Outcome-masked lift ladder + leakage audits -> tab_lift_ladder / tab_leak_audit =="
+python -m models.leakage_ladder
+
 echo "== 8. Build the paper =="
 ( cd paper && latexmk -pdf -interaction=nonstopmode main.tex )
 
