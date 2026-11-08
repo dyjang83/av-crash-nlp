@@ -39,8 +39,6 @@ scripts/      run_all.sh, probe_logprobs.py
 config.yaml   requirements.txt
 ```
 
-`paper/` (manuscript sources) is not currently published to this repository.
-
 ## Setup
 
 ```bash
@@ -49,40 +47,39 @@ export ANTHROPIC_API_KEY=...        # for the closed-model extraction backend
 export PYTHONPATH=src
 ```
 
-## Run order (`scripts/run_all.sh` covers steps 1–8)
+## Run order
 
-1. **Fetch** (needs open internet): `python3 -m fetch.fetch_sgo` and
-   `python3 -m fetch.fetch_dmv_ol316`. If your environment blocks these domains,
+1. **Fetch** (needs open internet): `python -m fetch.fetch_sgo` and
+   `python -m fetch.fetch_dmv_ol316`. If your environment blocks these domains,
    run this step elsewhere and copy `data/raw/` over.
-2. **Parse**: `python3 -m fetch.parse_ol316` → `data/interim/narratives.jsonl`.
-3. **Sample gold**: `python3 -m annotate.make_gold_sample --n 250 --seed 11`.
+2. **Parse**: `python -m fetch.parse_ol316` → `data/interim/narratives.jsonl`.
+3. **Sample gold**: `python -m annotate.make_gold_sample --n 250 --seed 11`.
    Then **annotate by hand** (`data/gold/annotator_A.jsonl`, `_B.jsonl`) per
    `src/annotate/annotation_guide.md`, and adjudicate into `data/gold/gold.jsonl`.
-4. **Extract**: `python3 -m extract.llm_extract --input data/interim/narratives.jsonl
+4. **Extract**: `python -m extract.llm_extract --input data/interim/narratives.jsonl
    --output data/processed/extractions.jsonl --backend anthropic
    --model claude-sonnet-4-6`.
    Open-weight models go through `--backend openai` against vLLM
    (`--server-type vllm`) or Ollama (`--server-type ollama`). Only these return
    token logprobs; see *Two confidence signals* below.
-5. **Score**: `python3 -m annotate.score_agreement` → IAA, extraction and
+5. **Score**: `python -m annotate.score_agreement` → IAA, extraction and
    calibration tables.
-6. **Score at corpus scale**: `python3 -m annotate.score_distant` → accuracy
+6. **Score at corpus scale**: `python -m annotate.score_distant` → accuracy
    against the distant key, with the abstention decomposition.
-7. **Transfer**: `python3 -m models.transfer_eval --model claude-sonnet-4-6`.
-8. **Lift test**: `python3 -m models.lift_test --embed tfidf` →
+7. **Transfer**: `python -m models.transfer_eval --model claude-sonnet-4-6`.
+8. **Lift test**: `python -m models.lift_test --embed tfidf` →
    `paper/tables/tab_lift.tex` and `data/processed/lift_test.json`.
-9. **Confidence signals** (needs an open-weight run from step 4, with logprobs):
-   `python3 -m annotate.score_confidence --extractions <that file>
+9. **Confidence signals**:
+   `python -m annotate.score_confidence --extractions <that file>
    --model qwen2.5:7b --committed-only`.
-10. **Human comparison**: `python3 -m fetch.fetch_crss` then
-    `python3 -m models.av_vs_human --n-boot 500` and
-    `python3 -m models.severity_dist --threshold any_injury`.
-11. **Build paper**: `cd paper && latexmk -pdf main.tex`.
+10. **Human comparison**: `python -m fetch.fetch_crss` then
+    `python -m models.av_vs_human --n-boot 500` and
+    `python -m models.severity_dist --threshold any_injury`.
 
 ## Verify the analysis code now (no data needed)
 
 ```bash
-python3 -m pytest tests/ -q       # 93 tests, synthetic fixtures only
+python -m pytest tests/ -q       # 93 tests, synthetic fixtures only
 ```
 
 ## Integrity design choices baked into the code
@@ -119,10 +116,10 @@ python3 -m pytest tests/ -q       # 93 tests, synthetic fixtures only
 
 ## Distant supervision
 
-Extraction accuracy is evaluated primarily against a **distant-supervision key**:
+Extraction accuracy is evaluated primarily against a distant-supervision key:
 the structured codes the reporting entities file alongside each narrative (SGO
-incident CSVs; OL 316 checkbox groups). This supplies **31,204 supervised field
-decisions across ten fields** at no annotation cost, far more than the
+incident CSVs; OL 316 checkbox groups). This supplies 31,204 supervised field
+decisions across ten fields at no annotation cost, far more than the
 hand-annotated sample provides.
 
 - `src/schema/distant_map.py` — value-level mapping from structured codes to
@@ -141,7 +138,7 @@ hand-annotated sample provides.
 doubly hand-annotated. Distant supervision replaces the convention-driven
 fields, not the judgment-driven one.
 
-**Abstention is not error.** Where the narrative does not state a condition the
+Abstention is not error. Where the narrative does not state a condition the
 extractor answers `unknown`; against a key that always committed, that scores as
 a miss. The reported figures separate abstention rate from accuracy on the
 committed subset, and the distinction matters far beyond presentation — see below.
@@ -150,7 +147,7 @@ committed subset, and the distinction matters far beyond presentation — see be
 
 The schema asks the model to write a `confidence` float into its own output.
 That is a *self-report*. An open-weight model served locally exposes a second,
-independent quantity: the **decode-time probability** of each field's value. The
+independent quantity: the decode-time probability of each field's value. The
 Anthropic tool-calling API does not, which is why this analysis covers only the
 open-weight backends.
 
@@ -183,7 +180,7 @@ representative sample of police-reported crashes.
 SGO's mandatory-filing threshold sits far below the bar at which a human crash
 generates a police report, so the raw corpora are not comparable and no
 reweighting makes them so — the populations differ in what they *contain*. Both
-sides are therefore restricted to a common **outcome** bar (any-injury, and
+sides are therefore restricted to a common outcome bar (any-injury, and
 separately tow-away), with retained-N reported on each side as the measurement
 of the gap. Crash *rates* are deliberately not computed: no exposure denominator
 exists here, which is also why no underreporting correction is needed.
@@ -202,7 +199,7 @@ collapsing to a single directional claim.
 
 ### Dependencies
 
-`pypdf` is **required**, not optional. OL 316 narratives live in AcroForm text
+`pypdf` is required. OL 316 narratives live in AcroForm text
 fields, not in the page content stream — without pypdf every one of the 868
 PDFs falls through to the page-text path, finds only the blank form template,
 and reports "no narrative found". The parser raises a clear error instead of
