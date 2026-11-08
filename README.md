@@ -4,12 +4,12 @@ A schema-constrained LLM pipeline that converts public autonomous-vehicle (AV)
 collision narratives (NHTSA SGO 2021-01 and CA DMV OL 316) into structured fields
 for insurance triage. It comprises of three components:
 
-- a **leakage-controlled lift test** — does narrative text add predictive value
+- a leakage-controlled lift test — does narrative text add predictive value
   for injury severity beyond the structured fields insurers already collect?
-- a **two-signal calibration study** — the model's self-reported confidence
+- a two-signal calibration study — the model's self-reported confidence
   versus the decoder's actual token probabilities, which only open-weight
   backends expose;
-- a **human-crash comparison** — where AV crashes differ structurally from
+- a human-crash comparison — where AV crashes differ structurally from
   police-reported human crashes (NHTSA CRSS), once the two reporting regimes are
   harmonized to a common population.
 
@@ -49,12 +49,11 @@ export PYTHONPATH=src
 
 ## Run order
 
-1. **Fetch** (needs open internet): `python -m fetch.fetch_sgo` and
-   `python -m fetch.fetch_dmv_ol316`. If your environment blocks these domains,
-   run this step elsewhere and copy `data/raw/` over.
+1. **Fetch**: `python -m fetch.fetch_sgo` and
+   `python -m fetch.fetch_dmv_ol316`.
 2. **Parse**: `python -m fetch.parse_ol316` → `data/interim/narratives.jsonl`.
 3. **Sample gold**: `python -m annotate.make_gold_sample --n 250 --seed 11`.
-   Then **annotate by hand** (`data/gold/annotator_A.jsonl`, `_B.jsonl`) per
+   Then annotate by hand (`data/gold/annotator_A.jsonl`, `_B.jsonl`) per
    `src/annotate/annotation_guide.md`, and adjudicate into `data/gold/gold.jsonl`.
 4. **Extract**: `python -m extract.llm_extract --input data/interim/narratives.jsonl
    --output data/processed/extractions.jsonl --backend anthropic
@@ -79,19 +78,19 @@ export PYTHONPATH=src
 ## Verify the analysis code now (no data needed)
 
 ```bash
-python -m pytest tests/ -q       # 93 tests, synthetic fixtures only
+python -m pytest tests/ -q     
 ```
 
-## Integrity design choices baked into the code
+## Integrity design choices
 
 - **No fault prediction.** `contributory_party` is validated as an extraction
   target only; it is dropped from the lift-test features (`DROP_FROM_T` in
   `build_features.py`) because predicting a text-derived field from text is
   circular.
 - **No outcome leakage.** `narrative_injury_severity` (text-derived) is dropped
-  from the predictors; the lift-test target is the independent *structured* SGO
+  from the predictors; the lift-test target is the independent structured SGO
   severity field.
-- **One canonical extraction model, enforced.** `build_features.load()` filters
+- **One canonical extraction model.** `build_features.load()` filters
   to `extraction.canonical_model` from `config.yaml` before deduplicating.
   Without the filter, a report_id extracted by several models resolved by JSONL
   append order — and because the contested rows were exactly those where the
@@ -99,20 +98,17 @@ python -m pytest tests/ -q       # 93 tests, synthetic fixtures only
   backfilled the *hardest* records.
 - **Entity-grouped CV.** Folds are grouped by reporting entity so models cannot
   exploit operator-specific phrasing.
-- **Effect size with the p-value**, never a p-value alone.
+- **Effect size with the p-value**.
 - **Nested hyperparameter selection.** `C` (logreg) and depth/learning-rate/L2
   (gbm) are chosen per representation by an inner GroupKFold search run on the
   training portion of each outer fold only, so the held-out rows used for the
   reported lift never inform the search that produced them.
-- **Estimator variance is reported, not hidden.** Gradient boosting draws its
+- **Estimator variance is reported.** Gradient boosting draws its
   early-stopping validation split from the training fold; with 14 fatalities in
   3,272 records that split lands differently per seed and moves QWK by up to
-  ~0.10 — wider than the bootstrap CI, which resamples examples for a *single*
+  ~0.10 — wider than the bootstrap CI, which resamples examples for a single
   fitted model and cannot see it. `lift_test.py` averages over seeds and reports
   the spread alongside the CI.
-- **Requested-but-unmeasurable is an error, not a no-op.** Asking for confidence
-  gating against extractions that carry no token probabilities raises instead of
-  silently completing and writing plausible numbers.
 
 ## Distant supervision
 
@@ -146,14 +142,14 @@ committed subset, and the distinction matters far beyond presentation — see be
 ## Two confidence signals
 
 The schema asks the model to write a `confidence` float into its own output.
-That is a *self-report*. An open-weight model served locally exposes a second,
+That is a self-report. An open-weight model served locally exposes a second,
 independent quantity: the decode-time probability of each field's value. The
 Anthropic tool-calling API does not, which is why this analysis covers only the
 open-weight backends.
 
 - `src/extract/token_probs.py` reconstructs the emitted JSON from its tokens,
   locates each field's value span by character offset, and renormalizes over the
-  *legal* enum members at each position — a chain rule restricted to the schema,
+  legal enum members at each position — a chain rule restricted to the schema,
   giving a posterior over categories rather than token strings. It distinguishes
   top-k truncation from schema determinism: once `parking` is emitted, only
   `parking_lot_private` remains reachable, and having no alternatives there is
@@ -168,7 +164,7 @@ open-weight backends.
   the figures stay comparable to previously published ones.
 
 Score with `--committed-only`. On the full sample the token signal's AUROC
-*inverts* on high-abstention fields, because `unknown` is a sharply-peaked safe
+inverts on high-abstention fields, because `unknown` is a sharply-peaked safe
 continuation that the distant key always marks wrong — the field ranking becomes
 abstention rate rather than signal quality.
 
@@ -179,10 +175,10 @@ representative sample of police-reported crashes.
 
 SGO's mandatory-filing threshold sits far below the bar at which a human crash
 generates a police report, so the raw corpora are not comparable and no
-reweighting makes them so — the populations differ in what they *contain*. Both
+reweighting makes them so — the populations differ in what they contain. Both
 sides are therefore restricted to a common outcome bar (any-injury, and
 separately tow-away), with retained-N reported on each side as the measurement
-of the gap. Crash *rates* are deliberately not computed: no exposure denominator
+of the gap. Crash rates are deliberately not computed: no exposure denominator
 exists here, which is also why no underreporting correction is needed.
 
 CRSS is a complex survey sample. Every human-side estimate is `WEIGHT`-ed and
@@ -190,7 +186,7 @@ variance comes from resampling PSUs within (year, stratum) cells; an iid
 bootstrap would ignore the clustering and report intervals far too narrow.
 `crss_map.py` projects each side independently into a shared space — there is no
 pairing, because an SGO crash and a CRSS crash are different crashes — using the
-coarsest space both can express *totally*, so projection drops only genuinely
+coarsest space both can express totally, so projection drops only genuinely
 missing values.
 
 `src/models/severity_dist.py` tests the severity distributions for first-order
@@ -205,15 +201,12 @@ PDFs falls through to the page-text path, finds only the blank form template,
 and reports "no narrative found". The parser raises a clear error instead of
 failing silently. The legacy `PyPDF2` package is not a substitute.
 
-`sentence-transformers` is left commented out (it pulls in torch) and is needed
-only for `lift_test.py --embed sbert`, the representation-robustness check.
-
 ### SGO schema generations
 
 The SGO third amendment (June 2025) restructured the incident CSVs. The parser
 covers both generations, but note:
 
-- `Lighting` was **dropped** with no replacement, so the current files supply no
+- `Lighting` was dropped with no replacement, so the current files supply no
   lighting supervision (2,270 of 3,503 SGO rows). OL 316 checkboxes fill much of
   this gap.
 - `ADS Equipped?` → `Engagement Status`, with graded values
@@ -229,7 +222,7 @@ than the integer codes, so a silently shifted code cannot corrupt an estimate.
 
 AcroForm names follow `<GROUP> <LETTER> <VEHICLE>` (e.g. `WEATHER A 1`,
 `MOVEMENT  B 2` — the double space is in the form). Letters index the printed
-option list; the trailing digit is the **vehicle number**, where vehicle 1 is
+option list; the trailing digit is the vehicle number, where vehicle 1 is
 the AV and vehicle 2 is the other party. `MOVEMENT` and `TYPE` are read for
 vehicle 1 only. The form's `ROADWAY` group is roadway *surface* (dry/wet/icy),
 not a road classification — OL 316 supplies no road-class or locality
