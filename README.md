@@ -2,7 +2,7 @@
 
 A schema-constrained LLM pipeline that converts public autonomous-vehicle (AV)
 collision narratives (NHTSA SGO 2021-01 and CA DMV OL 316) into structured fields
-for insurance triage. On top of that sit three analyses:
+for insurance triage. It comprises of three components:
 
 - a **leakage-controlled lift test** — does narrative text add predictive value
   for injury severity beyond the structured fields insurers already collect?
@@ -12,23 +12,6 @@ for insurance triage. On top of that sit three analyses:
 - a **human-crash comparison** — where AV crashes differ structurally from
   police-reported human crashes (NHTSA CRSS), once the two reporting regimes are
   harmonized to a common population.
-
-## What is in this repo, and what is *not*
-
-This repository contains the **complete, runnable code**. It does **not** contain
-results, and the results are not invented.
-
-- Everything under `data/` (raw, interim, processed) is gitignored. The numbers
-  come from running the pipeline below on the **real** public data.
-- Generated LaTeX tables and figures are not committed either. Every results
-  table is `\input` from `paper/tables/`; if a table has not been generated, a
-  placeholder renders in its place. Nothing is typed in by hand.
-- Two steps cannot be automated away: (a) downloading the data requires reaching
-  `nhtsa.gov` and `dmv.ca.gov`; (b) the gold evaluation set requires **two humans**
-  to code ~250 narratives.
-
-This is deliberate. The work's value depends on real data and a real
-human-validated gold set; fabricating either would make it useless.
 
 ## Layout
 
